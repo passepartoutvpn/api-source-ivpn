@@ -8,81 +8,107 @@ load "util.rb"
 
 ###
 
+template = File.read("../template/servers.json")
 ca = File.read("../static/ca.pem")
-tls_wrap = read_tls_wrap("auth", 1, "../static/ta.key", 4)
-countries = ["US", "FR", "DE", "ES", "IT"]
-bogus_ip_prefix = "1.2.3"
+tls_wrap = read_tls_wrap("auth", 1, "../static/ta.key", 1)
 
 cfg = {
-    ep: [
-        "UDP:1194",
-        "TCP:443",
-    ],
-    frame: 1,
-    ping: 60,
-    reneg: 3600
+  ca: ca,
+  tlsWrap: tls_wrap,
+  cipher: "AES-256-CBC",
+  digest: "SHA1",
+  compressionFraming: 0
 }
-
-recommended_cfg = cfg.dup
-recommended_cfg["ca"] = ca
-recommended_cfg["cipher"] = "AES-128-GCM"
-recommended_cfg["auth"] = "SHA1"
-recommended_cfg["wrap"] = tls_wrap
 
 recommended = {
-    id: "default",
-    name: "Default",
-    comment: "128-bit encryption",
-    cfg: recommended_cfg
+  id: "default",
+  name: "Default",
+  comment: "256-bit encryption",
+  ovpn: {
+    cfg: cfg
+  }
 }
-presets = [recommended]
 
 defaults = {
-    :username => "myusername",
-    :pool => "us",
-    :preset => "default"
+  :username => "ivpnXXXXXXXX",
+  :country => "US"
 }
 
 ###
 
-pools = []
-countries.each { |k|
-    id = k.downcase
-    hostname = "#{id}.sample-vpn-provider.bogus"
+json = JSON.parse(template)
 
-    addresses = nil
-    if ARGV.length > 0 && ARGV[0] == "noresolv"
-        addresses = []
+endpoints = []
+all_ports = json["config"]["ports"]
+all_ports["openvpn"].each { |map|
+  single_port = map["port"]
+  next if single_port.nil?
+  proto = map["type"]
+  endpoints << "#{proto}:#{single_port}"
+}
+
+recommended[:ovpn][:endpoints] = endpoints
+presets = [recommended]
+
+###
+
+servers = []
+
+json["openvpn"].each { |server|
+  hostname = server["gateway"]
+  hostname_comps = hostname.split(".")
+
+  id = hostname_comps[0]
+  country = server["country_code"]
+  category = ""
+  area = server["city"]
+  extraCountry = nil
+
+  resolved = server["hosts"].map { |h|
+    h["host"]
+  }
+
+  addresses = nil
+  if resolved.nil?
+    if hostname.nil?
+      next
+    end
+    if ARGV.include? "noresolv"
+      addresses = []
     else
-        #addresses = Resolv.getaddresses(hostname)
-        addresses = []
-        octet = 1
-        5.times {
-            ip = "#{bogus_ip_prefix}.#{octet}"
-            addresses << ip
-            octet += 1
-        }
+      addresses = Resolv.getaddresses(hostname)
     end
     addresses.map! { |a|
-        IPAddr.new(a).to_i
+      IPAddr.new(a).to_i
     }
+  else
+    addresses = resolved.map { |a|
+      IPAddr.new(a).to_i
+    }
+  end
 
-    pool = {
-        :id => id,
-        :name => "Sample #{k}",
-        :country => k,
-        :hostname => hostname,
-        :addrs => addresses
-    }
-    pools << pool
+  server = {
+    :id => id,
+    :country => country.upcase
+  }
+  server[:category] = category if !category.empty?
+  server[:extra_countries] = [extraCountry.upcase] if !extraCountry.nil?
+  server[:area] = area if !area.nil?
+  if hostname.empty?
+    server[:resolved] = true
+  else
+    server[:hostname] = hostname
+  end
+  server[:addrs] = addresses
+  servers << server
 }
 
 ###
 
 infra = {
-    :pools => pools,
-    :presets => presets,
-    :defaults => defaults
+  :servers => servers,
+  :presets => presets,
+  :defaults => defaults
 }
 
 puts infra.to_json
